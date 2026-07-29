@@ -24,6 +24,8 @@
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "READ_PHONE_STATE",
+        "SEND_SMS",
+        "READ_PHONE_STATE",
         "SEND_SMS"
       ],
       "package": "com.tonentreprise.smsgatewaymobile",
@@ -41,6 +43,12 @@
       "eas": {
         "projectId": "5e4a22ca-1460-480a-86af-880a5adf263b"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/5e4a22ca-1460-480a-86af-880a5adf263b"
     }
   }
 }
