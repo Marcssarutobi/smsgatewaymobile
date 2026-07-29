@@ -9,11 +9,13 @@ import { deviceStorage } from '../lib/deviceStorage';
 import { useHeartbeat } from '../hooks/useHeartbeat';
 import { useAuth } from '../hooks/useAuth';
 import { api } from '../services/api';
+import { useCurrentSubscription } from '../hooks/useSubscribe';
 
 export function DashboardScreen({ onNeedsPairing }: { onNeedsPairing: () => void }) {
   const { signOut } = useAuth();
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [checkingStorage, setCheckingStorage] = useState(true);
+  const {data: current} = useCurrentSubscription()
 
   useEffect(() => {
     deviceStorage.getDeviceId().then((id) => {
@@ -120,8 +122,8 @@ export function DashboardScreen({ onNeedsPairing }: { onNeedsPairing: () => void
 
       <View className="bg-indigo-600 rounded-2xl p-5">
         <Text className="text-indigo-100 text-xs font-semibold uppercase">SMS restants aujourd'hui</Text>
-        <Text className="text-white text-3xl font-extrabold mt-1">{remaining}</Text>
-        <Text className="text-indigo-200 text-xs mt-1">{totalSentToday} / {totalQuota} envoyés</Text>
+        <Text className="text-white text-3xl font-extrabold mt-1">{current?.plan?.sms_quota_monthly}</Text>
+        <Text className="text-indigo-200 text-xs mt-1">{totalSentToday} / {current?.plan?.sms_quota_monthly} envoyés</Text>
       </View>
 
       <View className="gap-2">

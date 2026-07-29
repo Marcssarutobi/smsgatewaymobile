@@ -7,8 +7,8 @@ import { googleAuthService } from '../services/googleAuthService';
 WebBrowser.maybeCompleteAuthSession();
 
 export function useGoogleAuth() {
-  const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
-    androidClientId: '642132289453-ch097s1ah6lh9v1srfvovrsu5shemttv.apps.googleusercontent.com',
+  const [request, response, promptAsync] = Google.useAuthRequest({
+    androidClientId: '642132289453-ap6hq7v1bsk0dssmd5jmpvnr5vl5h3ug.apps.googleusercontent.com',
     iosClientId: '642132289453-ch097s1ah6lh9v1srfvovrsu5shemttv.apps.googleusercontent.com',
     webClientId: '642132289453-ch097s1ah6lh9v1srfvovrsu5shemttv.apps.googleusercontent.com', // le même que côté Laravel
   });

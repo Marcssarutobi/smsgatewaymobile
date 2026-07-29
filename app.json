@@ -22,7 +22,10 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "permissions": ["READ_PHONE_STATE", "SEND_SMS"],
+      "permissions": [
+        "READ_PHONE_STATE",
+        "SEND_SMS"
+      ],
       "package": "com.tonentreprise.smsgatewaymobile",
       "softwareKeyboardLayoutMode": "pan"
     },
@@ -31,7 +34,13 @@
     },
     "plugins": [
       "expo-secure-store",
-      "expo-web-browser"
-    ]
+      "expo-web-browser",
+      "@react-native-google-signin/google-signin"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "5e4a22ca-1460-480a-86af-880a5adf263b"
+      }
+    }
   }
 }
