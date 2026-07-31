@@ -20,6 +20,9 @@ export const authService = {
     const { data } = await api.post('/auth/login', payload);
     return data;
   },
+  logout: async (): Promise<void> => {
+    await api.post('/auth/logout');
+  },
 };
 
 export function isTwoFactorPending(

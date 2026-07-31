@@ -1,9 +1,8 @@
 import axios from 'axios';
 import { tokenStorage } from '../lib/tokenStorage';
+import { API_BASE_URL } from '../lib/config';
 
-// À adapter : IP de ta machine sur le réseau local (pas "localhost",
-// ton téléphone ne peut pas résoudre "localhost" comme ton PC)
-const API_BASE_URL = 'http://192.168.100.17:8000/api';
+
 
 export const api = axios.create({
   baseURL: API_BASE_URL,

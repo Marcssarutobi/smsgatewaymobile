@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { tokenStorage } from '../lib/tokenStorage';
+import { deviceStorage } from '../lib/deviceStorage';
+import { authService } from '../services/authService';
 
 interface AuthContextType {
   token: string | null;
@@ -27,7 +29,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut = async () => {
+    await authService.logout();
     await tokenStorage.clear();
+    // Un device appairé appartient à UN compte précis — on ne peut pas
+    // laisser un autre utilisateur hériter du pairing du compte précédent.
+    await deviceStorage.clearToken();
+    await deviceStorage.clearDeviceId();
     setToken(null);
   };
 

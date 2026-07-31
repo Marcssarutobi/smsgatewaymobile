@@ -7,6 +7,7 @@ import { deviceStorage } from '../lib/deviceStorage';
 import { LoginScreen } from '../screens/LoginScreen';
 import { DashboardScreen } from '../screens/DashboardScreen';
 import { PairingScreen } from '../screens/PairingScreen';
+import { TwoFactorScreen } from '../screens/TwoFactorScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -34,7 +35,10 @@ export function RootNavigator() {
     <NavigationContainer>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {!token ? (
-          <Stack.Screen name="Login" component={LoginScreen} />
+          <>
+            <Stack.Screen name="Login" component={LoginScreen} />
+            <Stack.Screen name="TwoFactor" component={TwoFactorScreen} />
+          </>
         ) : !deviceId ? (
           <Stack.Screen name="Pairing">
             {(props) => (
