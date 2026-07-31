@@ -17,7 +17,7 @@ export const twoFactorService = {
     // le temp_token part bien en Authorization Bearer, sans interférence
     // avec un éventuel token utilisateur déjà stocké.
     const { data } = await axios.post(
-      `${API_BASE_URL}/2fa/verify`,
+      `${API_BASE_URL}/auth/2fa/verify`,
       { code },
       { headers: { Authorization: `Bearer ${tempToken}` } }
     );

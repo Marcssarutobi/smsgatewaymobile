@@ -7,12 +7,14 @@ import { useMutation } from '@tanstack/react-query';
 import { Button } from '../components/Button';
 import { pairingService } from '../services/pairingService';
 import { deviceStorage } from '../lib/deviceStorage';
+import { useAuth } from '../hooks/useAuth';
 
 export function PairingScreen({ onPaired }: { onPaired: () => void }) {
   const [permission, requestPermission] = useCameraPermissions();
   const [isScanning, setIsScanning] = useState(false);
   const [scanned, setScanned] = useState(false);
   const scannedRef = useRef(false);
+  const { signOut } = useAuth();
 
   const { mutate: pair, isPending } = useMutation({
     mutationFn: pairingService.pair,
@@ -61,7 +63,6 @@ export function PairingScreen({ onPaired }: { onPaired: () => void }) {
     }
   };
 
-  // --- Vue caméra (uniquement après avoir cliqué sur le bouton) ---
   if (isScanning) {
     return (
       <View className="flex-1 bg-black">
@@ -86,7 +87,6 @@ export function PairingScreen({ onPaired }: { onPaired: () => void }) {
     );
   }
 
-  // --- Écran d'accueil avec le bouton central ---
   return (
     <View className="flex-1 bg-slate-50 items-center justify-center px-8 gap-6">
       <View className="h-20 w-20 rounded-3xl bg-indigo-600 items-center justify-center shadow-sm">
@@ -102,8 +102,9 @@ export function PairingScreen({ onPaired }: { onPaired: () => void }) {
         </Text>
       </View>
 
-      <View className="w-full">
+      <View className="w-full gap-3">
         <Button label="Scanner le QR code" onPress={handleStartScan} />
+        <Button label="Se déconnecter" variant="outline" onPress={signOut} />
       </View>
     </View>
   );

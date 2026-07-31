@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { tokenStorage } from '../lib/tokenStorage';
 import { deviceStorage } from '../lib/deviceStorage';
 import { authService } from '../services/authService';
+import { queryClient } from '../lib/queryClient';
 
 interface AuthContextType {
   token: string | null;
@@ -29,12 +30,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut = async () => {
-    await authService.logout();
+    try {
+      await authService.logout();
+    } catch (e) {
+      // Le serveur peut être injoignable, ou le token déjà invalide/expiré
+      // (ex: après un reset de base) — on ne bloque JAMAIS la déconnexion
+      // locale pour autant, l'utilisateur doit toujours pouvoir se déconnecter.
+    }
+
     await tokenStorage.clear();
-    // Un device appairé appartient à UN compte précis — on ne peut pas
-    // laisser un autre utilisateur hériter du pairing du compte précédent.
     await deviceStorage.clearToken();
     await deviceStorage.clearDeviceId();
+
+    // Vide tout le cache React Query (données du dashboard, device, etc.)
+    // pour qu'un autre utilisateur qui se connecte ensuite ne voie jamais
+    // une miette des données du compte précédent.
+    queryClient.clear();
+
     setToken(null);
   };
 
