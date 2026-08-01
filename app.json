@@ -24,8 +24,6 @@
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "READ_PHONE_STATE",
-        "SEND_SMS",
-        "READ_PHONE_STATE",
         "SEND_SMS"
       ],
       "package": "com.tonentreprise.smsgatewaymobile",

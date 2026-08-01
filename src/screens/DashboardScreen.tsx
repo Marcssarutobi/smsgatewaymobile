@@ -7,6 +7,7 @@ import { Button } from '../components/Button';
 import { deviceService } from '../services/deviceService';
 import { deviceStorage } from '../lib/deviceStorage';
 import { useHeartbeat } from '../hooks/useHeartbeat';
+import { useJobPolling } from '../hooks/useJobPolling';
 import { useAuth } from '../hooks/useAuth';
 import { api } from '../services/api';
 import { useCurrentSubscription } from '../hooks/useSubscribe';
@@ -39,6 +40,7 @@ export function DashboardScreen({ onNeedsPairing }: { onNeedsPairing: () => void
   });
 
   useHeartbeat(!!deviceId && !isError);
+  useJobPolling(!!deviceId && !isError);
 
   // Le device stocké n'existe plus côté backend (supprimé, ou storage corrompu)
   // -> on nettoie et on renvoie vers le pairing plutôt que de rester bloqué
