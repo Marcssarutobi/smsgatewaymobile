@@ -1,6 +1,8 @@
 import { useState, useRef } from 'react';
-import { View, Text } from 'react-native';
+import { View, Text, PermissionsAndroid, Platform } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as Device from 'expo-device';
+import { getSimCards } from 'expo-android-sms-sender';
 import { QrCode } from 'lucide-react-native';
 import Toast from 'react-native-toast-message';
 import { useMutation } from '@tanstack/react-query';
@@ -32,6 +34,36 @@ export function PairingScreen({ onPaired }: { onPaired: () => void }) {
     },
   });
 
+  const getRealSims = async (): Promise<{ slot_index: number; operator?: string }[]> => {
+    if (Platform.OS !== 'android') return [{ slot_index: 0 }];
+
+    try {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.READ_PHONE_STATE
+      );
+
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+        Toast.show({ type: 'error', text1: 'Permission SIM refusée, SIM générique utilisée' });
+        return [{ slot_index: 0 }];
+      }
+
+      const sims = await getSimCards();
+
+      if (!sims || sims.length === 0) {
+        Toast.show({ type: 'error', text1: 'Aucune SIM détectée' });
+        return [{ slot_index: 0 }];
+      }
+
+      return sims.map((sim, index) => ({
+        slot_index: sim.slotIndex ?? index,
+        operator: sim.carrierName,
+      }));
+    } catch (e) {
+      Toast.show({ type: 'error', text1: 'Impossible de lire les SIM' });
+      return [{ slot_index: 0 }];
+    }
+  };
+
   const handleStartScan = async () => {
     if (!permission?.granted) {
       const result = await requestPermission();
@@ -43,17 +75,23 @@ export function PairingScreen({ onPaired }: { onPaired: () => void }) {
     setIsScanning(true);
   };
 
-  const handleScan = ({ data }: { data: string }) => {
+  const handleScan = async ({ data }: { data: string }) => {
     if (scannedRef.current) return;
     scannedRef.current = true;
     setScanned(true);
 
     try {
       const parsed = JSON.parse(data);
+      const sims = await getRealSims();
+      const deviceName =
+        Device.deviceName ??
+        `${Device.manufacturer ?? ''} ${Device.modelName ?? 'Android'}`.trim();
+
       pair({
         pairing_token: parsed.token,
-        device_name: 'Téléphone Android',
-        sims: [{ slot_index: 0 }],
+        device_name: deviceName,
+        android_device_id: Device.osBuildId ?? undefined,
+        sims,
       });
     } catch {
       Toast.show({ type: 'error', text1: 'QR code invalide' });

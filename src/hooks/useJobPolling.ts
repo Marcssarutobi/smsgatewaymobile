@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { PermissionsAndroid, Platform } from 'react-native';
 import { getSimCards, sendSms } from 'expo-android-sms-sender';
+import Toast from 'react-native-toast-message';
 import { jobService, PendingJob } from '../services/jobService';
 import { deviceService } from '../services/deviceService';
 import { deviceStorage } from '../lib/deviceStorage';
@@ -14,7 +15,7 @@ export function useJobPolling(enabled: boolean) {
     if (!enabled || Platform.OS !== 'android') return;
 
     const processJobs = async () => {
-      if (isProcessingRef.current) return; // évite les exécutions qui se chevauchent
+      if (isProcessingRef.current) return;
       isProcessingRef.current = true;
 
       try {
@@ -24,27 +25,38 @@ export function useJobPolling(enabled: boolean) {
         const jobs = await jobService.getPending();
         if (jobs.length === 0) return;
 
-        const granted = await PermissionsAndroid.request(
+        const smsGranted = await PermissionsAndroid.request(
           PermissionsAndroid.PERMISSIONS.SEND_SMS
         );
-        if (granted !== PermissionsAndroid.RESULTS.GRANTED) return;
+        if (smsGranted !== PermissionsAndroid.RESULTS.GRANTED) {
+          Toast.show({ type: 'error', text1: 'Permission SMS refusée' });
+          return;
+        }
 
-        // Récupère le device (avec ses sims: id + slot_index) pour savoir
-        // quelle SIM PHYSIQUE correspond au device_sim_id choisi par le serveur
+        const phoneStateGranted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.READ_PHONE_STATE
+        );
+        if (phoneStateGranted !== PermissionsAndroid.RESULTS.GRANTED) {
+          Toast.show({ type: 'error', text1: 'Permission SIM refusée' });
+          return;
+        }
+
         const device = await deviceService.getMyDevice(deviceId);
         const nativeSims = await getSimCards();
 
         for (const job of jobs) {
           await processOneJob(job, device, nativeSims);
         }
-      } catch (e) {
-        // Erreur réseau ou autre : on retentera au prochain cycle de polling
+      } catch (e: any) {
+        // On garde une trace visible pendant les tests, plutôt que d'avaler
+        // l'erreur silencieusement comme avant.
+        console.error('[useJobPolling] erreur:', e?.message ?? e);
       } finally {
         isProcessingRef.current = false;
       }
     };
 
-    processJobs(); // premier passage immédiat
+    processJobs();
     const interval = setInterval(processJobs, POLL_INTERVAL_MS);
 
     return () => clearInterval(interval);
@@ -64,8 +76,10 @@ async function processOneJob(job: PendingJob, device: any, nativeSims: any[]) {
 
     await sendSms(job.recipient, job.content, nativeSim?.id);
 
+    Toast.show({ type: 'success', text1: `SMS envoyé à ${job.recipient}` });
     await jobService.report(job.id, 'sent');
   } catch (error: any) {
-    await jobService.report(job.id, 'failed', error?.message ?? 'Échec de l\'envoi natif');
+    Toast.show({ type: 'error', text1: 'Échec envoi SMS', text2: error?.message });
+    await jobService.report(job.id, 'failed', error?.message ?? "Échec de l'envoi natif");
   }
 }
