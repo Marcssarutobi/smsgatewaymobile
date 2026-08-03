@@ -10,13 +10,11 @@ import { useHeartbeat } from '../hooks/useHeartbeat';
 import { useJobPolling } from '../hooks/useJobPolling';
 import { useAuth } from '../hooks/useAuth';
 import { api } from '../services/api';
-import { useCurrentSubscription } from '../hooks/useSubscribe';
 
 export function DashboardScreen({ onNeedsPairing }: { onNeedsPairing: () => void }) {
   const { signOut } = useAuth();
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [checkingStorage, setCheckingStorage] = useState(true);
-  const {data: current} = useCurrentSubscription()
 
   useEffect(() => {
     deviceStorage.getDeviceId().then((id) => {
@@ -25,32 +23,35 @@ export function DashboardScreen({ onNeedsPairing }: { onNeedsPairing: () => void
     });
   }, []);
 
-  const { data: device, isLoading, refetch, isRefetching, isError } = useQuery({
+  const { data: device, isLoading, refetch, isRefetching, isError, error } = useQuery({
     queryKey: ['my-device', deviceId],
     queryFn: () => deviceService.getMyDevice(deviceId!),
     enabled: !!deviceId,
     refetchInterval: 15_000,
-    retry: false, // ne pas réessayer en boucle si le device n'existe plus
+    retry: false,
   });
 
   const { data: smsLogs = [] } = useQuery({
     queryKey: ['sms-logs-chart'],
     queryFn: async () => (await api.get('/sms-logs')).data,
-    enabled: !!device, // pas la peine de charger ça si le device est invalide
+    enabled: !!device,
   });
 
   useHeartbeat(!!deviceId && !isError);
   useJobPolling(!!deviceId && !isError);
 
-  // Le device stocké n'existe plus côté backend (supprimé, ou storage corrompu)
-  // -> on nettoie et on renvoie vers le pairing plutôt que de rester bloqué
+  // Ne réinitialise le pairing QUE si le serveur confirme explicitement que
+  // ce device n'existe plus ou ne t'appartient plus (404/403) — jamais sur
+  // une simple coupure réseau, un timeout, ou un serveur temporairement injoignable.
   useEffect(() => {
-    if (isError && deviceId) {
+    const status = (error as any)?.response?.status;
+
+    if (isError && deviceId && (status === 404 || status === 403)) {
       deviceStorage.clearDeviceId();
       deviceStorage.clearToken();
       onNeedsPairing();
     }
-  }, [isError, deviceId]);
+  }, [isError, deviceId, error]);
 
   const chartData = (() => {
     const days = Array.from({ length: 7 }, (_, i) => {
@@ -80,11 +81,27 @@ export function DashboardScreen({ onNeedsPairing }: { onNeedsPairing: () => void
     );
   }
 
-  // Pas de deviceId du tout, ou device invalide en cours de nettoyage
-  if (!deviceId || isError) {
+  if (!deviceId) {
     return (
       <View className="flex-1 bg-slate-50 items-center justify-center px-6">
         <Text className="text-slate-500">Redirection vers l'appairage...</Text>
+      </View>
+    );
+  }
+
+  // Erreur réseau/serveur temporaire : on affiche un état clair sans
+  // effacer le pairing ni renvoyer vers le scan.
+  if (isError && !device) {
+    return (
+      <View className="flex-1 bg-slate-50 items-center justify-center px-6 gap-4">
+        <Text className="text-slate-700 font-semibold text-center">
+          Impossible de joindre le serveur
+        </Text>
+        <Text className="text-slate-500 text-sm text-center">
+          Vérifie ta connexion ou que le serveur est bien démarré.
+        </Text>
+        <Button label="Réessayer" onPress={() => refetch()} />
+        <Button label="Déconnexion" variant="outline" onPress={signOut} />
       </View>
     );
   }
@@ -124,8 +141,8 @@ export function DashboardScreen({ onNeedsPairing }: { onNeedsPairing: () => void
 
       <View className="bg-indigo-600 rounded-2xl p-5">
         <Text className="text-indigo-100 text-xs font-semibold uppercase">SMS restants aujourd'hui</Text>
-        <Text className="text-white text-3xl font-extrabold mt-1">{current?.plan?.sms_quota_monthly}</Text>
-        <Text className="text-indigo-200 text-xs mt-1">{totalSentToday} / {current?.plan?.sms_quota_monthly} envoyés</Text>
+        <Text className="text-white text-3xl font-extrabold mt-1">{remaining}</Text>
+        <Text className="text-indigo-200 text-xs mt-1">{totalSentToday} / {totalQuota} envoyés</Text>
       </View>
 
       <View className="gap-2">
