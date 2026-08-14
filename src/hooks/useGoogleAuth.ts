@@ -4,7 +4,7 @@ import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { useMutation } from '@tanstack/react-query';
 import { googleAuthService } from '../services/googleAuthService';
-import { GOOGLE_WEB_CLIENT_ID } from '../lib/config';
+import { GOOGLE_WEB_CLIENT_ID, GOOGLE_ANDROID_CLIENT_ID } from '../lib/config';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -17,6 +17,9 @@ export function useGoogleAuth() {
 
   const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
     webClientId: GOOGLE_WEB_CLIENT_ID,
+    // ⚠️ Obligatoire sur Android dès qu'on sort du proxy Expo (dev build / EAS build) :
+    // sans lui, Google Auth échoue avec "Client Id property `androidClientId` must be defined".
+    androidClientId: GOOGLE_ANDROID_CLIENT_ID,
     redirectUri,
   });
 
@@ -31,7 +34,7 @@ export function useGoogleAuth() {
     }
   }, [response]);
 
-  const isConfigured = GOOGLE_WEB_CLIENT_ID.length > 0;
+  const isConfigured = GOOGLE_WEB_CLIENT_ID.length > 0 && GOOGLE_ANDROID_CLIENT_ID.length > 0;
 
   return { promptAsync, isReady: isConfigured && !!request, isPending, data, error, isConfigured };
 }
