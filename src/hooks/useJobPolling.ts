@@ -8,6 +8,15 @@ import { deviceStorage } from '../lib/deviceStorage';
 
 const POLL_INTERVAL_MS = 15_000;
 
+// Nombre de tentatives sur une même SIM avant de basculer sur la suivante.
+// Les échecs "RIL SMS send failed" sont souvent transitoires (modem occupé,
+// pas encore enregistré sur le réseau...) : 3 essais rapprochés suffisent
+// généralement à distinguer un problème passager d'un vrai problème de SIM.
+const MAX_ATTEMPTS_PER_SIM = 3;
+const RETRY_DELAY_MS = 1500;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export function useJobPolling(enabled: boolean) {
   const isProcessingRef = useRef(false);
 
@@ -64,22 +73,61 @@ export function useJobPolling(enabled: boolean) {
 }
 
 async function processOneJob(job: PendingJob, device: any, nativeSims: any[]) {
-  try {
-    const matchingDbSim = device.sims?.find((s: any) => s.id === job.device_sim_id);
+  const assignedSim = device.sims?.find((s: any) => s.id === job.device_sim_id);
 
-    if (!matchingDbSim) {
-      await jobService.report(job.id, 'failed', 'SIM assignée introuvable sur ce device');
-      return;
-    }
-
-    const nativeSim = nativeSims.find((s) => s.slotIndex === matchingDbSim.slot_index);
-
-    await sendSms(job.recipient, job.content, nativeSim?.id);
-
-    Toast.show({ type: 'success', text1: `SMS envoyé à ${job.recipient}` });
-    await jobService.report(job.id, 'sent');
-  } catch (error: any) {
-    Toast.show({ type: 'error', text1: 'Échec envoi SMS', text2: error?.message });
-    await jobService.report(job.id, 'failed', error?.message ?? "Échec de l'envoi natif");
+  if (!assignedSim) {
+    await jobService.report(job.id, 'failed', 'SIM assignée introuvable sur ce device');
+    return;
   }
+
+  // Ordre d'essai : la SIM assignée par le backend d'abord, puis les autres SIM
+  // actives de CE téléphone qui ont encore du quota journalier, de la moins
+  // sollicitée à la plus sollicitée. On ne bascule jamais vers un autre device :
+  // l'envoi natif ne peut se faire que via une SIM physiquement présente ici.
+  const fallbackSims = (device.sims ?? [])
+    .filter((s: any) => s.id !== assignedSim.id && s.is_active && s.sent_today < s.daily_quota)
+    .sort((a: any, b: any) => a.sent_today - b.sent_today);
+
+  const simsToTry = [assignedSim, ...fallbackSims];
+
+  const attemptErrors: string[] = [];
+
+  for (const dbSim of simsToTry) {
+    const nativeSim = nativeSims.find((s) => s.slotIndex === dbSim.slot_index);
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_SIM; attempt++) {
+      try {
+        await sendSms(job.recipient, job.content, nativeSim?.id);
+
+        Toast.show({ type: 'success', text1: `SMS envoyé à ${job.recipient}` });
+        // On ne renvoie le device_sim_id que si on a dû basculer sur une autre
+        // SIM que celle initialement assignée, pour que le backend recrédite
+        // le quota journalier sur la bonne SIM.
+        await jobService.report(
+          job.id,
+          'sent',
+          undefined,
+          dbSim.id !== job.device_sim_id ? dbSim.id : undefined
+        );
+        return;
+      } catch (error: any) {
+        const message = error?.message ?? "Échec de l'envoi natif";
+        attemptErrors.push(`SIM #${dbSim.id} (essai ${attempt}/${MAX_ATTEMPTS_PER_SIM}): ${message}`);
+
+        // Dernier essai sur cette SIM : pas la peine d'attendre avant de
+        // passer à la SIM suivante (ou de conclure à un échec total).
+        if (attempt < MAX_ATTEMPTS_PER_SIM) {
+          await sleep(RETRY_DELAY_MS);
+        }
+      }
+    }
+  }
+
+  // Toutes les SIM disponibles ont été essayées MAX_ATTEMPTS_PER_SIM fois chacune, sans succès.
+  const summary = simsToTry.length > 1
+    ? `Échec sur ${simsToTry.length} SIM après ${MAX_ATTEMPTS_PER_SIM} tentatives chacune`
+    : `Échec après ${MAX_ATTEMPTS_PER_SIM} tentatives`;
+
+  Toast.show({ type: 'error', text1: 'Échec envoi SMS', text2: summary });
+  await jobService.report(job.id, 'failed', `${summary}. Détails : ${attemptErrors.join(' | ')}`);
 }

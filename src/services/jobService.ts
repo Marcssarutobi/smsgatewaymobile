@@ -16,11 +16,13 @@ export const jobService = {
   report: async (
     smsId: number,
     status: 'sent' | 'failed',
-    errorMessage?: string
+    errorMessage?: string,
+    deviceSimId?: number
   ): Promise<void> => {
     await deviceApi.post(`/device/jobs/${smsId}/report`, {
       status,
       error_message: errorMessage,
+      device_sim_id: deviceSimId,
     });
   },
 };
