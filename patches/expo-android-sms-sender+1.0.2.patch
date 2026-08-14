@@ -1,0 +1,99 @@
+diff --git a/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/ExpoAndroidSmsSenderModule.kt b/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/ExpoAndroidSmsSenderModule.kt
+index b2ef9c0..45ddec3 100644
+--- a/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/ExpoAndroidSmsSenderModule.kt
++++ b/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/ExpoAndroidSmsSenderModule.kt
+@@ -57,13 +57,54 @@ class ExpoAndroidSmsSenderModule : Module() {
+       }
+ 
+       val smsManager = getSmsManager(context, simCardId)
+-      val sentIntent = createSentPendingIntent(context, promise)
+ 
+       try {
+-        smsManager.sendTextMessage(phoneNumber, null, message, sentIntent, null)
+-      } catch(e: IllegalArgumentException) {
++        // Un SMS "simple" tient sur ~160 caractères GSM-7, ou seulement ~70 s'il
++        // contient un accent/emoji (encodage forcé en UCS-2) — donc quasiment
++        // tout message un peu long en français. Au-delà, sendTextMessage()
++        // (single-part) est en comportement indéfini selon les modems, et
++        // échoue souvent avec RIL_SMS_SEND_FAIL_RETRY. divideMessage() +
++        // sendMultipartTextMessage() découpent et laissent le téléphone du
++        // destinataire réassembler les segments, quelle que soit la longueur.
++        val parts = smsManager.divideMessage(message)
++        val settled = java.util.concurrent.atomic.AtomicBoolean(false)
++        val remaining = java.util.concurrent.atomic.AtomicInteger(parts.size)
++        val action = "$SMS_SENT_ACTION-${System.currentTimeMillis()}"
++
++        val receiver = object : BroadcastReceiver() {
++          override fun onReceive(ctx: Context?, intent: Intent?) {
++            if (resultCode != Activity.RESULT_OK) {
++              if (settled.compareAndSet(false, true)) {
++                context.unregisterReceiver(this)
++                val errorCode = SMS_ERROR_CODES[resultCode] ?: "UNKNOWN_ERROR"
++                val errorMessage = SMS_ERROR_DESCRIPTIONS[errorCode] ?: "Unknown error occurred with result code: $resultCode"
++                promise.reject(errorCode, errorMessage, null)
++              }
++              return
++            }
++
++            // Ne résout qu'une fois TOUS les segments confirmés envoyés.
++            if (remaining.decrementAndGet() == 0 && settled.compareAndSet(false, true)) {
++              context.unregisterReceiver(this)
++              promise.resolve(null)
++            }
++          }
++        }
++
++        ContextCompat.registerReceiver(context, receiver, IntentFilter(action), ContextCompat.RECEIVER_NOT_EXPORTED)
++
++        val sentIntents = ArrayList<PendingIntent>(parts.size)
++        for (i in parts.indices) {
++          val intent = Intent(action).setPackage(context.packageName)
++          sentIntents.add(
++            PendingIntent.getBroadcast(context, i, intent, PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE)
++          )
++        }
++
++        smsManager.sendMultipartTextMessage(phoneNumber, null, parts, sentIntents, null)
++      } catch (e: IllegalArgumentException) {
+         promise.reject("INVALID_ARGUMENTS", "Invalid arguments provided", e)
+-      } catch(e: UnsupportedOperationException) {
++      } catch (e: UnsupportedOperationException) {
+         promise.reject("NOT_SUPPORTED", "Sending SMS is not supported on your device", e)
+       }
+     }
+@@ -79,34 +120,7 @@ class ExpoAndroidSmsSenderModule : Module() {
+     }
+   }
+ 
+-  private fun createSentPendingIntent(context: Context, promise: Promise): PendingIntent {
+-    val intent = Intent(SMS_SENT_ACTION).setPackage(context.packageName)
+-    val pendingIntent = PendingIntent.getBroadcast(
+-      context,
+-      System.currentTimeMillis().toInt(),
+-      intent,
+-      PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+-    )
+-
+-    ContextCompat.registerReceiver(context, object : BroadcastReceiver() {
+-      override fun onReceive(ctx: Context?, intent: Intent?) {
+-        context.unregisterReceiver(this)
+-        
+-        val errorCode = SMS_ERROR_CODES[resultCode] ?: "UNKNOWN_ERROR"
+-        val errorMessage = SMS_ERROR_DESCRIPTIONS[errorCode] ?: "Unknown error occurred with result code: $resultCode"
+-        
+-        if (resultCode == Activity.RESULT_OK) {
+-          promise.resolve(null)
+-        } else {
+-          promise.reject(errorCode, errorMessage, null)
+-        }
+-      }
+-    }, IntentFilter(SMS_SENT_ACTION), ContextCompat.RECEIVER_NOT_EXPORTED)
+-
+-    return pendingIntent
+-  }
+-
+-    companion object {
++  companion object {
+     private const val PERMISSION_DENIED = "PERMISSION_DENIED"
+     private const val GENERIC_ERROR = "ERROR"
+     

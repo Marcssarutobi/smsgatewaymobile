@@ -7,7 +7,7 @@ import { Input } from '../components/Input';
 import { useLogin } from '../hooks/useLogin';
 import { isTwoFactorPending } from '../services/authService';
 import { useAuth } from '../hooks/useAuth';
-//import { useGoogleAuth } from '../hooks/useGoogleAuth';
+import { useGoogleAuth } from '../hooks/useGoogleAuth';
 
 export function LoginScreen({ navigation }: any) {
   const [email, setEmail] = useState('');
@@ -15,17 +15,23 @@ export function LoginScreen({ navigation }: any) {
   const { mutate: login, isPending } = useLogin();
   const { signIn } = useAuth();
 
-  // const { promptAsync, isReady, isPending: isGooglePending, data: googleData } = useGoogleAuth();
+  const { promptAsync, isReady, isConfigured, isPending: isGooglePending, data: googleData, error: googleError } = useGoogleAuth();
 
-  // useEffect(() => {
-  //   if (googleData) {
-  //     if (isTwoFactorPending(googleData)) {
-  //       navigation.navigate('TwoFactor', { tempToken: googleData.temp_token });
-  //       return;
-  //     }
-  //     signIn(googleData.token);
-  //   }
-  // }, [googleData]);
+  useEffect(() => {
+    if (googleData) {
+      if (isTwoFactorPending(googleData)) {
+        navigation.navigate('TwoFactor', { tempToken: googleData.temp_token });
+        return;
+      }
+      signIn(googleData.token);
+    }
+  }, [googleData]);
+
+  useEffect(() => {
+    if (googleError) {
+      Toast.show({ type: 'error', text1: 'Connexion Google impossible' });
+    }
+  }, [googleError]);
 
   const handleSubmit = () => {
     if (!email || !password) {
@@ -76,9 +82,9 @@ export function LoginScreen({ navigation }: any) {
         <Button
           label="Continuer avec Google"
           variant="outline"
-          //isLoading={isGooglePending}
-          //disabled={!isReady}
-          onPress={() => {}}
+          isLoading={isGooglePending}
+          disabled={!isReady}
+          onPress={() => promptAsync()}
         />
 
         <View className="bg-white rounded-2xl border border-slate-200 mt-4 p-5 gap-4 shadow-sm">
@@ -107,9 +113,11 @@ export function LoginScreen({ navigation }: any) {
           />
         </View>
 
-        <Text className="text-center text-xs text-slate-400 mt-6">
-          La connexion Google sera disponible prochainement
-        </Text>
+        {!isConfigured && (
+          <Text className="text-center text-xs text-amber-600 mt-6">
+            Connexion Google non configurée (EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID manquant dans .env)
+          </Text>
+        )}
       </ScrollView>
     </KeyboardAvoidingView>
   );

@@ -4,14 +4,16 @@ import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { useMutation } from '@tanstack/react-query';
 import { googleAuthService } from '../services/googleAuthService';
+import { GOOGLE_WEB_CLIENT_ID } from '../lib/config';
 
 WebBrowser.maybeCompleteAuthSession();
 
-// ⚠️ Remplace par ton VRAI Web Client ID (le même que GOOGLE_CLIENT_ID côté Laravel)
-const GOOGLE_WEB_CLIENT_ID = '642132289453-ch097s1ah6lh9v1srfvovrsu5shemttv.apps.googleusercontent.com';
-
 export function useGoogleAuth() {
-  const redirectUri = AuthSession.makeRedirectUri({ useProxy: true } as any);
+  // `useProxy` a été retiré d'expo-auth-session (le service de proxy Expo
+  // n'existe plus) : le retour OAuth se fait maintenant via le scheme natif
+  // de l'app ("smsgatewaymobile://", défini dans app.json), ce qui nécessite
+  // un dev build ou un build EAS — ça ne fonctionnera pas dans Expo Go.
+  const redirectUri = AuthSession.makeRedirectUri({ scheme: 'smsgatewaymobile' });
 
   const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
     webClientId: GOOGLE_WEB_CLIENT_ID,
@@ -29,5 +31,7 @@ export function useGoogleAuth() {
     }
   }, [response]);
 
-  return { promptAsync, isReady: !!request, isPending, data, error };
+  const isConfigured = GOOGLE_WEB_CLIENT_ID.length > 0;
+
+  return { promptAsync, isReady: isConfigured && !!request, isPending, data, error, isConfigured };
 }
