@@ -9,6 +9,7 @@ import { deviceStorage } from '../lib/deviceStorage';
 import { useHeartbeat } from '../hooks/useHeartbeat';
 import { useJobPolling } from '../hooks/useJobPolling';
 import { useAuth } from '../hooks/useAuth';
+import { useCurrentSubscription } from '../hooks/useSubscribe';
 import { api } from '../services/api';
 
 export function DashboardScreen({ onNeedsPairing }: { onNeedsPairing: () => void }) {
@@ -36,6 +37,10 @@ export function DashboardScreen({ onNeedsPairing }: { onNeedsPairing: () => void
     queryFn: async () => (await api.get('/sms-logs')).data,
     enabled: !!device,
   });
+
+  // Quota mensuel du plan souscrit (Feda/abonnement), affiché en complément
+  // du quota journalier par SIM déjà géré ci-dessous.
+  const { data: currentSubscription } = useCurrentSubscription();
 
   useHeartbeat(!!deviceId && !isError);
   useJobPolling(!!deviceId && !isError);
@@ -144,6 +149,32 @@ export function DashboardScreen({ onNeedsPairing }: { onNeedsPairing: () => void
         <Text className="text-white text-3xl font-extrabold mt-1">{remaining}</Text>
         <Text className="text-indigo-200 text-xs mt-1">{totalSentToday} / {totalQuota} envoyés</Text>
       </View>
+
+      {currentSubscription?.plan && (
+        <View className="bg-white rounded-2xl border border-slate-200 p-4">
+          <View className="flex-row items-center justify-between">
+            <Text className="text-xs font-bold text-slate-700">
+              Plan {currentSubscription.plan.name} — quota mensuel
+            </Text>
+            <Text className="text-xs font-mono text-slate-500">
+              {currentSubscription.sms_used}/{currentSubscription.plan.sms_quota_monthly}
+            </Text>
+          </View>
+          <View className="h-1.5 rounded-full bg-slate-100 mt-2 overflow-hidden">
+            <View
+              className="h-full rounded-full bg-indigo-500"
+              style={{
+                width: `${Math.min(
+                  100,
+                  Math.round(
+                    (currentSubscription.sms_used / Math.max(1, currentSubscription.plan.sms_quota_monthly)) * 100
+                  )
+                )}%`,
+              }}
+            />
+          </View>
+        </View>
+      )}
 
       <View className="gap-2">
         <Text className="text-sm font-bold text-slate-900">SIM détectées</Text>
