@@ -1,40 +1,62 @@
-import { useEffect } from 'react';
-import * as Google from 'expo-auth-session/providers/google';
-import * as AuthSession from 'expo-auth-session';
-import * as WebBrowser from 'expo-web-browser';
+import { useState } from 'react';
+import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
 import { useMutation } from '@tanstack/react-query';
 import { googleAuthService } from '../services/googleAuthService';
-import { GOOGLE_WEB_CLIENT_ID, GOOGLE_ANDROID_CLIENT_ID } from '../lib/config';
+import { GOOGLE_WEB_CLIENT_ID } from '../lib/config';
 
-WebBrowser.maybeCompleteAuthSession();
+// SDK natif Google (Play Services / Credential Manager) : contrairement à
+// expo-auth-session, `GoogleSignin.signIn()` affiche le sélecteur de comptes
+// natif Android (tiroir en bas avec les comptes déjà connectés sur le
+// téléphone) au lieu d'ouvrir un navigateur. Nécessite un dev build / build
+// EAS (ne fonctionne pas dans Expo Go) et le SHA-1 du build enregistré côté
+// Google Cloud Console sur le client OAuth "Android".
+GoogleSignin.configure({
+  // Toujours le client "Web" : c'est lui qui signe l'id_token vérifié par le
+  // backend (voir GOOGLE_WEB_CLIENT_ID côté Laravel) — inchangé par rapport à
+  // avant, aucune modification nécessaire côté backend.
+  webClientId: GOOGLE_WEB_CLIENT_ID,
+  offlineAccess: false,
+});
 
 export function useGoogleAuth() {
-  // `useProxy` a été retiré d'expo-auth-session (le service de proxy Expo
-  // n'existe plus) : le retour OAuth se fait maintenant via le scheme natif
-  // de l'app ("smsgatewaymobile://", défini dans app.json), ce qui nécessite
-  // un dev build ou un build EAS — ça ne fonctionnera pas dans Expo Go.
-  const redirectUri = AuthSession.makeRedirectUri({ scheme: 'smsgatewaymobile' });
+  const [error, setError] = useState<unknown>(null);
 
-  const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
-    webClientId: GOOGLE_WEB_CLIENT_ID,
-    // ⚠️ Obligatoire sur Android dès qu'on sort du proxy Expo (dev build / EAS build) :
-    // sans lui, Google Auth échoue avec "Client Id property `androidClientId` must be defined".
-    androidClientId: GOOGLE_ANDROID_CLIENT_ID,
-    redirectUri,
-  });
-
-  const { mutate: loginWithGoogle, isPending, data, error } = useMutation({
+  const {
+    mutate: loginWithGoogle,
+    isPending,
+    data,
+  } = useMutation({
     mutationFn: googleAuthService.loginWithIdToken,
   });
 
-  useEffect(() => {
-    if (response?.type === 'success') {
-      const { id_token } = response.params;
-      loginWithGoogle(id_token);
+  const promptAsync = async () => {
+    try {
+      setError(null);
+      await GoogleSignin.hasPlayServices();
+      const response = await GoogleSignin.signIn();
+      const idToken = response.data?.idToken;
+
+      if (idToken) {
+        loginWithGoogle(idToken);
+      } else {
+        setError(new Error('Aucun id_token retourné par Google'));
+      }
+    } catch (e: any) {
+      // L'utilisateur a simplement annulé : ce n'est pas une erreur à afficher.
+      if (e?.code !== statusCodes.SIGN_IN_CANCELLED) {
+        setError(e);
+      }
     }
-  }, [response]);
+  };
 
-  const isConfigured = GOOGLE_WEB_CLIENT_ID.length > 0 && GOOGLE_ANDROID_CLIENT_ID.length > 0;
+  const isConfigured = GOOGLE_WEB_CLIENT_ID.length > 0;
 
-  return { promptAsync, isReady: isConfigured && !!request, isPending, data, error, isConfigured };
+  return {
+    promptAsync,
+    isReady: isConfigured,
+    isPending,
+    data,
+    error,
+    isConfigured,
+  };
 }

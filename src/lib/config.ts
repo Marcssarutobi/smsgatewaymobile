@@ -11,7 +11,8 @@ export const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID
 
 // ID client OAuth "Android" créé dans la Google Cloud Console (Identifiants > ID client OAuth
 // > Application Android), lié au package "com.tonentreprise.smsgatewaymobile" et à l'empreinte
-// SHA-1 du build (voir `eas credentials` pour la récupérer). Sans lui, Google Auth échoue sur
-// Android dès qu'on n'est plus dans le proxy Expo (dev build / build EAS) avec l'erreur :
-// "Client Id property `androidClientId` must be defined to use Google auth on this platform."
+// SHA-1 du build (voir `eas credentials` pour la récupérer). Avec le SDK natif
+// (@react-native-google-signin/google-signin), cette valeur n'est plus passée explicitement en
+// code : Google la retrouve côté serveur via le SHA-1 enregistré sur ce client Android. On la
+// garde disponible ici si besoin (debug, vérifications manuelles).
 export const GOOGLE_ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? '';
