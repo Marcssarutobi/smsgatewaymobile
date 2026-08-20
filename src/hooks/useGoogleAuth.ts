@@ -19,33 +19,54 @@ GoogleSignin.configure({
 });
 
 export function useGoogleAuth() {
-  const [error, setError] = useState<unknown>(null);
+  const [pickerError, setPickerError] = useState<unknown>(null);
 
   const {
     mutate: loginWithGoogle,
     isPending,
     data,
+    error: loginError, // erreur de l'appel POST /auth/google/mobile (ex: 401 "Token non destiné à cette application")
   } = useMutation({
     mutationFn: googleAuthService.loginWithIdToken,
   });
 
   const promptAsync = async () => {
     try {
-      setError(null);
+      setPickerError(null);
       await GoogleSignin.hasPlayServices();
+
+      // Sans ce signOut, une fois qu'un compte a été choisi une première fois,
+      // le module natif Google garde une session en cache : les appels
+      // suivants à signIn() ne réaffichent plus le sélecteur de comptes (ils
+      // tentent une reconnexion silencieuse) et, si une tentative précédente
+      // n'a jamais résolu proprement sa promesse, peuvent même rester bloqués
+      // sans jamais rien renvoyer. On repart donc d'un état propre à chaque clic.
+      if (GoogleSignin.hasPreviousSignIn()) {
+        await GoogleSignin.signOut();
+      }
+
       const response = await GoogleSignin.signIn();
       const idToken = response.data?.idToken;
 
       if (idToken) {
-        loginWithGoogle(idToken);
+        loginWithGoogle(idToken, {
+          onError: (e) => console.error('[GoogleAuth] Échec appel /auth/google/mobile:', e),
+        });
       } else {
-        setError(new Error('Aucun id_token retourné par Google'));
+        setPickerError(new Error('Aucun id_token retourné par Google'));
       }
     } catch (e: any) {
       // L'utilisateur a simplement annulé : ce n'est pas une erreur à afficher.
-      if (e?.code !== statusCodes.SIGN_IN_CANCELLED) {
-        setError(e);
+      if (e?.code === statusCodes.SIGN_IN_CANCELLED) {
+        return;
       }
+      // Une tentative précédente est encore considérée "en cours" côté natif
+      // (cas où une tentative antérieure n'a jamais résolu sa promesse).
+      if (e?.code === statusCodes.IN_PROGRESS) {
+        setPickerError(new Error('Une connexion Google est déjà en cours, réessaie dans quelques secondes.'));
+        return;
+      }
+      setPickerError(e);
     }
   };
 
@@ -56,7 +77,10 @@ export function useGoogleAuth() {
     isReady: isConfigured,
     isPending,
     data,
-    error,
+    // On expose désormais AUSSI l'erreur backend (loginError), qui avant
+    // n'était jamais renvoyée : le picker Google réussissait, l'appel au
+    // backend échouait, et personne n'était prévenu (ni toast, ni navigation).
+    error: pickerError ?? loginError,
     isConfigured,
   };
 }
