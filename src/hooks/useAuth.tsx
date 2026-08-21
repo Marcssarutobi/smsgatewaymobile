@@ -1,6 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { tokenStorage } from '../lib/tokenStorage';
-import { deviceStorage } from '../lib/deviceStorage';
 import { authService } from '../services/authService';
 import { queryClient } from '../lib/queryClient';
 
@@ -39,8 +38,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     await tokenStorage.clear();
-    await deviceStorage.clearToken();
-    await deviceStorage.clearDeviceId();
+    // Le pairing (deviceStorage) N'EST PAS effacé ici volontairement : le
+    // téléphone reste configuré comme passerelle SMS indépendamment des
+    // allers-retours de connexion/déconnexion de l'utilisateur, comme
+    // WhatsApp. Le dépairage réel se fait uniquement depuis DashboardScreen
+    // (bouton dédié, ou automatiquement si le serveur confirme que ce
+    // device n'existe plus — voir le useEffect sur 404/403 dans ce fichier).
 
     // Vide tout le cache React Query (données du dashboard, device, etc.)
     // pour qu'un autre utilisateur qui se connecte ensuite ne voie jamais
