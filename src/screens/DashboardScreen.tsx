@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { View, Text, ScrollView, RefreshControl, Dimensions } from 'react-native';
+import { View, Text, ScrollView, RefreshControl, Dimensions, PermissionsAndroid, Platform } from 'react-native';
 import { BarChart } from 'react-native-chart-kit';
 import { Wifi, WifiOff, Battery as BatteryIcon } from 'lucide-react-native';
 import { useQuery } from '@tanstack/react-query';
@@ -11,6 +11,8 @@ import { useJobPolling } from '../hooks/useJobPolling';
 import { useAuth } from '../hooks/useAuth';
 import { useCurrentSubscription } from '../hooks/useSubscribe';
 import { api } from '../services/api';
+import { API_BASE_URL } from '../lib/config';
+import { startBackgroundService, stopBackgroundService, isBackgroundServiceConfigured } from 'expo-android-sms-sender';
 
 export function DashboardScreen({ onNeedsPairing }: { onNeedsPairing: () => void }) {
   const { signOut } = useAuth();
@@ -54,9 +56,35 @@ export function DashboardScreen({ onNeedsPairing }: { onNeedsPairing: () => void
     if (isError && deviceId && (status === 404 || status === 403)) {
       deviceStorage.clearDeviceId();
       deviceStorage.clearToken();
+      stopBackgroundService().catch(() => {});
       onNeedsPairing();
     }
   }, [isError, deviceId, error]);
+
+  // Rétro-compatibilité : les téléphones pairés AVANT l'ajout du service en
+  // arrière-plan n'ont jamais appelé startBackgroundService (voir
+  // PairingScreen). On le démarre ici une seule fois si ce n'est pas déjà
+  // fait, pour que ces téléphones bénéficient aussi de l'envoi fiable même
+  // app fermée, sans avoir à se dépairer/repairer.
+  useEffect(() => {
+    if (!deviceId) return;
+
+    (async () => {
+      const alreadyConfigured = await isBackgroundServiceConfigured().catch(() => false);
+      if (alreadyConfigured) return;
+
+      const token = await deviceStorage.getToken();
+      if (!token) return;
+
+      if (Platform.OS === 'android' && Platform.Version >= 33) {
+        await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS).catch(() => {});
+      }
+
+      await startBackgroundService(token, deviceId, API_BASE_URL).catch((e) => {
+        console.error('[DashboardScreen] démarrage rétroactif du service impossible:', e);
+      });
+    })();
+  }, [deviceId]);
 
   const chartData = (() => {
     const days = Array.from({ length: 7 }, (_, i) => {

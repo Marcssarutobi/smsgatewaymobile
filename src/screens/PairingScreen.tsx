@@ -2,7 +2,7 @@ import { useState, useRef } from 'react';
 import { View, Text, PermissionsAndroid, Platform, ScrollView } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Device from 'expo-device';
-import { getSimCards } from 'expo-android-sms-sender';
+import { getSimCards, startBackgroundService } from 'expo-android-sms-sender';
 import { QrCode, Phone } from 'lucide-react-native';
 import Toast from 'react-native-toast-message';
 import { useMutation } from '@tanstack/react-query';
@@ -11,6 +11,7 @@ import { Input } from '../components/Input';
 import { pairingService } from '../services/pairingService';
 import { deviceStorage } from '../lib/deviceStorage';
 import { useAuth } from '../hooks/useAuth';
+import { API_BASE_URL } from '../lib/config';
 
 type SimDraft = { slot_index: number; operator?: string; phone_number: string };
 
@@ -40,6 +41,25 @@ export function PairingScreen({ onPaired }: { onPaired: () => void }) {
     onSuccess: async (data) => {
       await deviceStorage.setToken(data.device_token);
       await deviceStorage.setDeviceId(String(data.device.id));
+
+      // Android 13+ exige cette permission pour afficher la notification
+      // persistante du service au premier plan — sans elle le service peut
+      // quand même tourner, mais silencieusement (moins rassurant pour
+      // l'utilisateur). On la demande ici, une seule fois, juste après le
+      // pairing plutôt qu'au lancement de l'app.
+      if (Platform.OS === 'android' && Platform.Version >= 33) {
+        await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+      }
+
+      try {
+        await startBackgroundService(data.device_token, String(data.device.id), API_BASE_URL);
+      } catch (e) {
+        // Le pairing reste valide même si le service natif échoue à démarrer
+        // ici (ex: permission refusée) : useJobPolling/useHeartbeat côté JS
+        // prendront le relais tant que l'app reste ouverte au premier plan.
+        console.error('[PairingScreen] démarrage du service en arrière-plan impossible:', e);
+      }
+
       Toast.show({ type: 'success', text1: 'Téléphone connecté !' });
       onPaired();
     },

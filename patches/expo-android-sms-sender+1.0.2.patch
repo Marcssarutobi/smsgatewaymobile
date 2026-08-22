@@ -1,13 +1,127 @@
+diff --git a/node_modules/expo-android-sms-sender/android/src/main/AndroidManifest.xml b/node_modules/expo-android-sms-sender/android/src/main/AndroidManifest.xml
+index 91855ff..06272f0 100644
+--- a/node_modules/expo-android-sms-sender/android/src/main/AndroidManifest.xml
++++ b/node_modules/expo-android-sms-sender/android/src/main/AndroidManifest.xml
+@@ -1,4 +1,29 @@
+ <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+   <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+   <uses-permission android:name="android.permission.SEND_SMS" />
++
++  <!-- Service au premier plan + démarrage auto au boot, pour que l'envoi de SMS
++       continue de fonctionner même app fermée / téléphone verrouillé / juste
++       redémarré, sans dépendre du thread JS (voir SmsGatewayForegroundService). -->
++  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
++  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
++  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
++  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
++
++  <application>
++    <service
++      android:name="expo.modules.androidsmssender.SmsGatewayForegroundService"
++      android:enabled="true"
++      android:exported="false"
++      android:foregroundServiceType="dataSync" />
++
++    <receiver
++      android:name="expo.modules.androidsmssender.BootReceiver"
++      android:enabled="true"
++      android:exported="true">
++      <intent-filter>
++        <action android:name="android.intent.action.BOOT_COMPLETED" />
++      </intent-filter>
++    </receiver>
++  </application>
+ </manifest>
+diff --git a/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/BootReceiver.kt b/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/BootReceiver.kt
+new file mode 100644
+index 0000000..6d1186b
+--- /dev/null
++++ b/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/BootReceiver.kt
+@@ -0,0 +1,22 @@
++package expo.modules.androidsmssender
++
++import android.content.BroadcastReceiver
++import android.content.Context
++import android.content.Intent
++
++// Reçoit BOOT_COMPLETED (déclaré dans AndroidManifest.xml de ce module) et
++// relance automatiquement le service au premier plan, pour que ce téléphone
++// reprenne son rôle de passerelle SMS sans que quiconque ait besoin de
++// rouvrir l'app après un redémarrage.
++class BootReceiver : BroadcastReceiver() {
++  override fun onReceive(context: Context, intent: Intent) {
++    if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
++
++    // Ne démarre que si ce téléphone a déjà été pairé au moins une fois —
++    // sinon rien à faire tant que l'app n'a pas été configurée manuellement.
++    val prefs = SmsGatewayPrefs(context)
++    if (!prefs.hasDeviceToken()) return
++
++    SmsGatewayForegroundService.start(context)
++  }
++}
 diff --git a/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/ExpoAndroidSmsSenderModule.kt b/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/ExpoAndroidSmsSenderModule.kt
-index b2ef9c0..45ddec3 100644
+index b2ef9c0..72dd8ca 100644
 --- a/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/ExpoAndroidSmsSenderModule.kt
 +++ b/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/ExpoAndroidSmsSenderModule.kt
-@@ -57,13 +57,54 @@ class ExpoAndroidSmsSenderModule : Module() {
+@@ -21,6 +21,51 @@ class ExpoAndroidSmsSenderModule : Module() {
+   override fun definition() = ModuleDefinition {
+     Name("ExpoAndroidSmsSender")
+ 
++    // Démarre (ou redémarre) le service au premier plan qui continuera l'envoi
++    // de SMS même app fermée / téléphone verrouillé. Persiste les identifiants
++    // en SharedPreferences natif (voir SmsGatewayPrefs) pour que BootReceiver
++    // puisse le relancer tout seul après un redémarrage du téléphone.
++    AsyncFunction("startBackgroundService") { deviceToken: String, deviceId: String, apiBaseUrl: String, promise: Promise ->
++      val context = appContext.reactContext ?: run {
++        promise.reject(GENERIC_ERROR, "React context indisponible", null)
++        return@AsyncFunction
++      }
++
++      try {
++        SmsGatewayPrefs(context).save(deviceToken, deviceId, apiBaseUrl)
++        SmsGatewayForegroundService.start(context)
++        promise.resolve(null)
++      } catch (e: Exception) {
++        promise.reject(GENERIC_ERROR, "Impossible de démarrer le service : ${e.message}", e)
++      }
++    }
++
++    // Appelé au dépairage (voir DashboardScreen) : arrête le service et efface
++    // les identifiants natifs, pour qu'un redémarrage du téléphone ne relance
++    // rien pour ce téléphone tant qu'il n'est pas pairé à nouveau.
++    AsyncFunction("stopBackgroundService") { promise: Promise ->
++      val context = appContext.reactContext ?: run {
++        promise.reject(GENERIC_ERROR, "React context indisponible", null)
++        return@AsyncFunction
++      }
++
++      try {
++        SmsGatewayForegroundService.stop(context)
++        SmsGatewayPrefs(context).clear()
++        promise.resolve(null)
++      } catch (e: Exception) {
++        promise.reject(GENERIC_ERROR, "Impossible d'arrêter le service : ${e.message}", e)
++      }
++    }
++
++    AsyncFunction("isBackgroundServiceConfigured") { promise: Promise ->
++      val context = appContext.reactContext ?: run {
++        promise.resolve(false)
++        return@AsyncFunction
++      }
++      promise.resolve(SmsGatewayPrefs(context).hasDeviceToken())
++    }
++
+     AsyncFunction("getSimCards") { promise: Promise ->
+       val context = appContext.reactContext ?: return@AsyncFunction
+ 
+@@ -57,13 +102,54 @@ class ExpoAndroidSmsSenderModule : Module() {
        }
  
        val smsManager = getSmsManager(context, simCardId)
 -      val sentIntent = createSentPendingIntent(context, promise)
- 
+       
        try {
 -        smsManager.sendTextMessage(phoneNumber, null, message, sentIntent, null)
 -      } catch(e: IllegalArgumentException) {
@@ -61,7 +175,7 @@ index b2ef9c0..45ddec3 100644
          promise.reject("NOT_SUPPORTED", "Sending SMS is not supported on your device", e)
        }
      }
-@@ -79,34 +120,7 @@ class ExpoAndroidSmsSenderModule : Module() {
+@@ -79,34 +165,7 @@ class ExpoAndroidSmsSenderModule : Module() {
      }
    }
  
@@ -97,3 +211,582 @@ index b2ef9c0..45ddec3 100644
      private const val PERMISSION_DENIED = "PERMISSION_DENIED"
      private const val GENERIC_ERROR = "ERROR"
      
+diff --git a/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/SmsGatewayApiClient.kt b/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/SmsGatewayApiClient.kt
+new file mode 100644
+index 0000000..f64e695
+--- /dev/null
++++ b/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/SmsGatewayApiClient.kt
+@@ -0,0 +1,88 @@
++package expo.modules.androidsmssender
++
++import org.json.JSONArray
++import org.json.JSONObject
++import java.net.HttpURLConnection
++import java.net.URL
++import java.io.OutputStreamWriter
++
++// Client HTTP minimal (HttpURLConnection + org.json, tous deux inclus dans le
++// SDK Android — zéro dépendance Gradle supplémentaire à faire compiler) pour
++// que le service en arrière-plan puisse parler au backend indépendamment
++// d'axios/JS. Reproduit exactement les 3 appels déjà utilisés côté JS
++// (voir jobService.ts et deviceService.ts) avec le même contrat.
++class SmsGatewayApiClient(private val baseUrl: String, private val deviceToken: String) {
++
++  data class PendingJob(val id: Long, val deviceSimId: Long?, val recipient: String, val content: String)
++
++  fun getPendingJobs(): List<PendingJob> {
++    val response = request("GET", "/device/jobs/pending", null) ?: return emptyList()
++    val jobsArray = JSONObject(response).optJSONArray("jobs") ?: JSONArray()
++
++    return (0 until jobsArray.length()).map { i ->
++      val job = jobsArray.getJSONObject(i)
++      PendingJob(
++        id = job.getLong("id"),
++        deviceSimId = if (job.isNull("device_sim_id")) null else job.getLong("device_sim_id"),
++        recipient = job.getString("recipient"),
++        content = job.getString("content"),
++      )
++    }
++  }
++
++  fun reportJob(jobId: Long, status: String, errorMessage: String?, deviceSimId: Long?) {
++    val body = JSONObject().apply {
++      put("status", status)
++      if (errorMessage != null) put("error_message", errorMessage)
++      if (deviceSimId != null) put("device_sim_id", deviceSimId)
++    }
++    request("POST", "/device/jobs/$jobId/report", body)
++  }
++
++  fun sendHeartbeat(batteryLevel: Int?) {
++    val body = JSONObject().apply {
++      if (batteryLevel != null) put("battery_level", batteryLevel)
++    }
++    request("POST", "/device/heartbeat", body)
++  }
++
++  // Nécessaire pour retrouver le slot_index correspondant au device_sim_id
++  // renvoyé par un job (voir GET /devices/{id} déjà utilisé côté JS).
++  fun getDeviceSims(deviceId: String): Map<Long, Int> {
++    val response = request("GET", "/devices/$deviceId", null) ?: return emptyMap()
++    val sims = JSONObject(response).optJSONArray("sims") ?: JSONArray()
++
++    return (0 until sims.length()).associate { i ->
++      val sim = sims.getJSONObject(i)
++      sim.getLong("id") to sim.getInt("slot_index")
++    }
++  }
++
++  private fun request(method: String, path: String, body: JSONObject?): String? {
++    return try {
++      val url = URL(baseUrl.trimEnd('/') + path)
++      val connection = url.openConnection() as HttpURLConnection
++      connection.requestMethod = method
++      connection.setRequestProperty("Authorization", "Bearer $deviceToken")
++      connection.setRequestProperty("Accept", "application/json")
++      connection.connectTimeout = 15_000
++      connection.readTimeout = 15_000
++
++      if (body != null) {
++        connection.doOutput = true
++        connection.setRequestProperty("Content-Type", "application/json")
++        OutputStreamWriter(connection.outputStream).use { it.write(body.toString()) }
++      }
++
++      val code = connection.responseCode
++      val stream = if (code in 200..299) connection.inputStream else connection.errorStream
++      val text = stream?.bufferedReader()?.use { it.readText() }
++
++      if (code !in 200..299) null else text
++    } catch (e: Exception) {
++      // Coupure réseau, serveur injoignable, timeout... le prochain cycle de
++      // la boucle du service réessaiera — jamais fatal pour le service lui-même.
++      null
++    }
++  }
++}
+diff --git a/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/SmsGatewayForegroundService.kt b/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/SmsGatewayForegroundService.kt
+new file mode 100644
+index 0000000..6d51589
+--- /dev/null
++++ b/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/SmsGatewayForegroundService.kt
+@@ -0,0 +1,194 @@
++package expo.modules.androidsmssender
++
++import android.app.Notification
++import android.app.NotificationChannel
++import android.app.NotificationManager
++import android.app.PendingIntent
++import android.app.Service
++import android.content.Context
++import android.content.Intent
++import android.os.BatteryManager
++import android.os.Build
++import android.os.IBinder
++import android.telephony.SubscriptionManager
++import androidx.core.app.NotificationCompat
++import androidx.core.content.ContextCompat
++
++// Service au premier plan : contrairement à la boucle JS (useJobPolling +
++// useHeartbeat, coupée dès que l'app passe en arrière-plan ou est fermée),
++// un foreground service est explicitement exempté des restrictions Android
++// de mise en veille (Doze, App Standby) tant que sa notification persistante
++// reste visible. C'est ce qui permet à l'envoi de SMS de continuer même
++// écran éteint / app fermée / juste après un redémarrage du téléphone
++// (démarré par BootReceiver).
++class SmsGatewayForegroundService : Service() {
++
++  private var workerThread: Thread? = null
++  @Volatile private var isRunning = false
++  private var smsSentCount = 0
++
++  override fun onCreate() {
++    super.onCreate()
++    createNotificationChannel()
++  }
++
++  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
++    startForeground(NOTIFICATION_ID, buildNotification("En veille — en attente de SMS à envoyer"))
++
++    if (workerThread?.isAlive != true) {
++      isRunning = true
++      workerThread = Thread(::runLoop, "SmsGatewayWorker").apply { start() }
++    }
++
++    // START_STICKY : si le système tue le processus pour libérer de la mémoire,
++    // Android le relance automatiquement dès que possible (sans redemander de
++    // recréer l'Intent d'origine, ce qui est correct ici car tout ce dont on a
++    // besoin est déjà en SharedPreferences, pas dans l'Intent).
++    return START_STICKY
++  }
++
++  override fun onDestroy() {
++    isRunning = false
++    workerThread?.interrupt()
++    super.onDestroy()
++  }
++
++  override fun onBind(intent: Intent?): IBinder? = null
++
++  private fun runLoop() {
++    val prefs = SmsGatewayPrefs(applicationContext)
++    var lastHeartbeatAt = 0L
++
++    while (isRunning) {
++      val deviceToken = prefs.getDeviceToken()
++      val deviceId = prefs.getDeviceId()
++      val apiBaseUrl = prefs.getApiBaseUrl()
++
++      // Plus de token = téléphone dépairé entre-temps (voir DashboardScreen) :
++      // rien à faire, le service s'arrête de lui-même plutôt que de tourner à vide.
++      if (deviceToken.isNullOrEmpty() || deviceId.isNullOrEmpty() || apiBaseUrl.isNullOrEmpty()) {
++        stopSelf()
++        return
++      }
++
++      val client = SmsGatewayApiClient(apiBaseUrl, deviceToken)
++
++      try {
++        val now = System.currentTimeMillis()
++        if (now - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
++          client.sendHeartbeat(getBatteryLevel())
++          lastHeartbeatAt = now
++        }
++
++        val jobs = client.getPendingJobs()
++        if (jobs.isNotEmpty()) {
++          val simSlotsByDeviceSimId = client.getDeviceSims(deviceId)
++          for (job in jobs) {
++            if (!isRunning) break
++            processJob(client, job, simSlotsByDeviceSimId)
++          }
++        }
++      } catch (e: Exception) {
++        // Ne jamais laisser une exception inattendue tuer le thread du
++        // service : le prochain cycle réessaiera.
++      }
++
++      try {
++        Thread.sleep(POLL_INTERVAL_MS)
++      } catch (e: InterruptedException) {
++        return
++      }
++    }
++  }
++
++  private fun processJob(
++    client: SmsGatewayApiClient,
++    job: SmsGatewayApiClient.PendingJob,
++    simSlotsByDeviceSimId: Map<Long, Int>,
++  ) {
++    val slotIndex = job.deviceSimId?.let { simSlotsByDeviceSimId[it] }
++    val subscriptionId = slotIndex?.let { resolveSubscriptionId(it) }
++
++    val result = SmsSendHelper.sendBlocking(applicationContext, job.recipient, job.content, subscriptionId)
++
++    if (result.success) {
++      smsSentCount++
++      updateNotification("$smsSentCount SMS envoyés depuis le démarrage")
++      client.reportJob(job.id, "sent", null, null)
++    } else {
++      client.reportJob(job.id, "failed", result.errorMessage ?: "Échec inconnu", null)
++    }
++  }
++
++  // Convertit un slot physique (0, 1...) en subscriptionId attendu par
++  // SmsManager — même mapping que getSimCards() côté JS (voir SimCard.kt),
++  // mais lu directement ici pour rester autonome du bridge React Native.
++  private fun resolveSubscriptionId(slotIndex: Int): Int? {
++    return try {
++      val subscriptionManager = getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
++      subscriptionManager.activeSubscriptionInfoList
++        ?.firstOrNull { it.simSlotIndex == slotIndex }
++        ?.subscriptionId
++    } catch (e: SecurityException) {
++      null // Permission READ_PHONE_STATE révoquée entre-temps : repli sur la SIM par défaut.
++    }
++  }
++
++  private fun getBatteryLevel(): Int? {
++    val batteryManager = getSystemService(Context.BATTERY_SERVICE) as? BatteryManager ?: return null
++    val level = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
++    return if (level in 0..100) level else null
++  }
++
++  private fun createNotificationChannel() {
++    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
++
++    val channel = NotificationChannel(
++      CHANNEL_ID,
++      "SMS Gateway",
++      NotificationManager.IMPORTANCE_LOW, // silencieux : c'est un statut, pas une alerte
++    ).apply {
++      description = "Maintient l'envoi de SMS actif en arrière-plan"
++    }
++
++    val manager = getSystemService(NotificationManager::class.java)
++    manager?.createNotificationChannel(channel)
++  }
++
++  private fun buildNotification(contentText: String): Notification {
++    val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
++    val pendingIntent = launchIntent?.let {
++      PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_IMMUTABLE)
++    }
++
++    return NotificationCompat.Builder(this, CHANNEL_ID)
++      .setContentTitle("Passerelle SMS active")
++      .setContentText(contentText)
++      .setSmallIcon(android.R.drawable.stat_sys_upload)
++      .setOngoing(true)
++      .setContentIntent(pendingIntent)
++      .setPriority(NotificationCompat.PRIORITY_LOW)
++      .build()
++  }
++
++  private fun updateNotification(contentText: String) {
++    val manager = getSystemService(NotificationManager::class.java)
++    manager?.notify(NOTIFICATION_ID, buildNotification(contentText))
++  }
++
++  companion object {
++    private const val CHANNEL_ID = "sms_gateway_background"
++    private const val NOTIFICATION_ID = 4821
++    private const val POLL_INTERVAL_MS = 15_000L
++    private const val HEARTBEAT_INTERVAL_MS = 30_000L
++
++    fun start(context: Context) {
++      val intent = Intent(context, SmsGatewayForegroundService::class.java)
++      ContextCompat.startForegroundService(context, intent)
++    }
++
++    fun stop(context: Context) {
++      context.stopService(Intent(context, SmsGatewayForegroundService::class.java))
++    }
++  }
++}
+diff --git a/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/SmsGatewayPrefs.kt b/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/SmsGatewayPrefs.kt
+new file mode 100644
+index 0000000..572a485
+--- /dev/null
++++ b/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/SmsGatewayPrefs.kt
+@@ -0,0 +1,42 @@
++package expo.modules.androidsmssender
++
++import android.content.Context
++
++private const val PREFS_NAME = "sms_gateway_background_prefs"
++private const val KEY_DEVICE_TOKEN = "device_token"
++private const val KEY_DEVICE_ID = "device_id"
++private const val KEY_API_BASE_URL = "api_base_url"
++
++// SharedPreferences plutôt que expo-secure-store : le service au premier plan
++// tourne dans un contexte natif indépendant du pont React Native — parfois
++// avant même que le JS ait démarré, par ex. juste après un redémarrage du
++// téléphone via BootReceiver — et doit pouvoir lire ces valeurs de façon
++// synchrone, sans invoquer le bridge. Le device_token reste un secret à
++// portée limitée (un seul téléphone, révocable à tout moment depuis le
++// dashboard web), donc ce compromis simplicité/sécurité est raisonnable ici.
++class SmsGatewayPrefs(context: Context) {
++  private val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
++
++  fun hasDeviceToken(): Boolean = !getDeviceToken().isNullOrEmpty()
++
++  fun getDeviceToken(): String? = prefs.getString(KEY_DEVICE_TOKEN, null)
++
++  fun getDeviceId(): String? = prefs.getString(KEY_DEVICE_ID, null)
++
++  fun getApiBaseUrl(): String? = prefs.getString(KEY_API_BASE_URL, null)
++
++  fun save(deviceToken: String, deviceId: String, apiBaseUrl: String) {
++    prefs.edit()
++      .putString(KEY_DEVICE_TOKEN, deviceToken)
++      .putString(KEY_DEVICE_ID, deviceId)
++      .putString(KEY_API_BASE_URL, apiBaseUrl)
++      .apply()
++  }
++
++  // Appelé à la déconnexion / dépairage : arrête toute tentative d'envoi
++  // ultérieure (le service se coupe de lui-même dès qu'il ne trouve plus de
++  // token au prochain cycle, voir SmsGatewayForegroundService).
++  fun clear() {
++    prefs.edit().clear().apply()
++  }
++}
+diff --git a/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/SmsSendHelper.kt b/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/SmsSendHelper.kt
+new file mode 100644
+index 0000000..0fb1a7b
+--- /dev/null
++++ b/node_modules/expo-android-sms-sender/android/src/main/java/expo/modules/androidsmssender/SmsSendHelper.kt
+@@ -0,0 +1,93 @@
++package expo.modules.androidsmssender
++
++import android.app.PendingIntent
++import android.content.BroadcastReceiver
++import android.content.Context
++import android.content.Intent
++import android.content.IntentFilter
++import android.os.Build
++import android.telephony.SmsManager
++import androidx.core.content.ContextCompat
++import java.util.concurrent.CountDownLatch
++import java.util.concurrent.TimeUnit
++import java.util.concurrent.atomic.AtomicBoolean
++import java.util.concurrent.atomic.AtomicInteger
++
++// Résultat d'un envoi, utilisé par SmsGatewayForegroundService pour reporter
++// le statut exact au backend (voir jobService.report côté JS).
++data class SmsSendResult(val success: Boolean, val errorMessage: String? = null)
++
++// Équivalent bloquant de `sendSms` du module JS (voir ExpoAndroidSmsSenderModule.kt) :
++// même découpage multipart + même mécanisme de confirmation par broadcast, mais on
++// attend le résultat au lieu de résoudre une Promise, pour pouvoir l'appeler
++// séquentiellement depuis la boucle du service en arrière-plan.
++object SmsSendHelper {
++
++  fun sendBlocking(
++    context: Context,
++    phoneNumber: String,
++    message: String,
++    subscriptionId: Int?,
++    timeoutSeconds: Long = 30,
++  ): SmsSendResult {
++    val smsManager = getSmsManager(context, subscriptionId)
++
++    return try {
++      val parts = smsManager.divideMessage(message)
++      val latch = CountDownLatch(1)
++      val settled = AtomicBoolean(false)
++      val remaining = AtomicInteger(parts.size)
++      val resultHolder = arrayOfNulls<String>(1) // null = succès, sinon message d'erreur
++      val action = "SMS_GATEWAY_BG_SENT-${System.currentTimeMillis()}"
++
++      val receiver = object : BroadcastReceiver() {
++        override fun onReceive(ctx: Context?, intent: Intent?) {
++          if (resultCode != android.app.Activity.RESULT_OK) {
++            if (settled.compareAndSet(false, true)) {
++              resultHolder[0] = "Échec envoi natif (code $resultCode)"
++              context.unregisterReceiver(this)
++              latch.countDown()
++            }
++            return
++          }
++
++          if (remaining.decrementAndGet() == 0 && settled.compareAndSet(false, true)) {
++            context.unregisterReceiver(this)
++            latch.countDown()
++          }
++        }
++      }
++
++      ContextCompat.registerReceiver(context, receiver, IntentFilter(action), ContextCompat.RECEIVER_NOT_EXPORTED)
++
++      val sentIntents = ArrayList<PendingIntent>(parts.size)
++      for (i in parts.indices) {
++        val intent = Intent(action).setPackage(context.packageName)
++        sentIntents.add(
++          PendingIntent.getBroadcast(context, i, intent, PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE)
++        )
++      }
++
++      smsManager.sendMultipartTextMessage(phoneNumber, null, parts, sentIntents, null)
++
++      val completed = latch.await(timeoutSeconds, TimeUnit.SECONDS)
++      if (!completed) {
++        SmsSendResult(false, "Timeout : aucune confirmation d'envoi après ${timeoutSeconds}s")
++      } else {
++        SmsSendResult(resultHolder[0] == null, resultHolder[0])
++      }
++    } catch (e: Exception) {
++      SmsSendResult(false, e.message ?: "Erreur inconnue lors de l'envoi")
++    }
++  }
++
++  private fun getSmsManager(context: Context, subscriptionId: Int?): SmsManager {
++    return if (subscriptionId == null) {
++      context.getSystemService(SmsManager::class.java)
++    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
++      context.getSystemService(SmsManager::class.java).createForSubscriptionId(subscriptionId)
++    } else {
++      SmsManager.getSmsManagerForSubscriptionId(subscriptionId)
++    }
++  }
++}
+diff --git a/node_modules/expo-android-sms-sender/build/ExpoAndroidSmsSenderModule.d.ts b/node_modules/expo-android-sms-sender/build/ExpoAndroidSmsSenderModule.d.ts
+index 0bfe218..2782fb8 100644
+--- a/node_modules/expo-android-sms-sender/build/ExpoAndroidSmsSenderModule.d.ts
++++ b/node_modules/expo-android-sms-sender/build/ExpoAndroidSmsSenderModule.d.ts
+@@ -2,6 +2,9 @@ import { NativeModule } from 'expo';
+ declare class ExpoAndroidSmsSenderModule extends NativeModule {
+     getSimCards(): Promise<string>;
+     sendSms(phoneNumber: string, text: string, simCardId?: number): Promise<void>;
++    startBackgroundService(deviceToken: string, deviceId: string, apiBaseUrl: string): Promise<void>;
++    stopBackgroundService(): Promise<void>;
++    isBackgroundServiceConfigured(): Promise<boolean>;
+ }
+ declare const _default: ExpoAndroidSmsSenderModule;
+ export default _default;
+diff --git a/node_modules/expo-android-sms-sender/build/index.d.ts b/node_modules/expo-android-sms-sender/build/index.d.ts
+index 20feb98..e83196e 100644
+--- a/node_modules/expo-android-sms-sender/build/index.d.ts
++++ b/node_modules/expo-android-sms-sender/build/index.d.ts
+@@ -39,9 +39,27 @@ export declare function getSimCards(): Promise<SimCard[]>;
+  * @throws {Error} If sending the SMS fails due to permissions, invalid input, or system errors.
+  */
+ export declare function sendSms(phoneNumber: string, text: string, simCardId?: number): Promise<void>;
++/**
++ * Démarre le service Android au premier plan qui continue de recevoir et
++ * d'envoyer les SMS en attente même app fermée / téléphone verrouillé, et le
++ * relance automatiquement après un redémarrage du téléphone.
++ */
++export declare function startBackgroundService(deviceToken: string, deviceId: string, apiBaseUrl: string): Promise<void>;
++/**
++ * Arrête le service en arrière-plan et efface les identifiants natifs
++ * persistés — à appeler au dépairage du téléphone.
++ */
++export declare function stopBackgroundService(): Promise<void>;
++/**
++ * Indique si un device_token a été persisté nativement.
++ */
++export declare function isBackgroundServiceConfigured(): Promise<boolean>;
+ declare const _default: {
+     getSimCards: typeof getSimCards;
+     sendSms: typeof sendSms;
++    startBackgroundService: typeof startBackgroundService;
++    stopBackgroundService: typeof stopBackgroundService;
++    isBackgroundServiceConfigured: typeof isBackgroundServiceConfigured;
+ };
+ export default _default;
+ //# sourceMappingURL=index.d.ts.map
+\ No newline at end of file
+diff --git a/node_modules/expo-android-sms-sender/build/index.js b/node_modules/expo-android-sms-sender/build/index.js
+index b4a33af..1c99a40 100644
+--- a/node_modules/expo-android-sms-sender/build/index.js
++++ b/node_modules/expo-android-sms-sender/build/index.js
+@@ -44,5 +44,26 @@ export async function getSimCards() {
+ export async function sendSms(phoneNumber, text, simCardId) {
+     await ExpoAndroidSmsSenderModule.sendSms(phoneNumber, text, simCardId);
+ }
+-export default { getSimCards, sendSms };
++/**
++ * Démarre le service Android au premier plan qui continue de recevoir et
++ * d'envoyer les SMS en attente même app fermée / téléphone verrouillé, et le
++ * relance automatiquement après un redémarrage du téléphone.
++ */
++export async function startBackgroundService(deviceToken, deviceId, apiBaseUrl) {
++    await ExpoAndroidSmsSenderModule.startBackgroundService(deviceToken, deviceId, apiBaseUrl);
++}
++/**
++ * Arrête le service en arrière-plan et efface les identifiants natifs
++ * persistés — à appeler au dépairage du téléphone.
++ */
++export async function stopBackgroundService() {
++    await ExpoAndroidSmsSenderModule.stopBackgroundService();
++}
++/**
++ * Indique si un device_token a été persisté nativement.
++ */
++export async function isBackgroundServiceConfigured() {
++    return ExpoAndroidSmsSenderModule.isBackgroundServiceConfigured();
++}
++export default { getSimCards, sendSms, startBackgroundService, stopBackgroundService, isBackgroundServiceConfigured };
+ //# sourceMappingURL=index.js.map
+\ No newline at end of file
+diff --git a/node_modules/expo-android-sms-sender/src/ExpoAndroidSmsSenderModule.ts b/node_modules/expo-android-sms-sender/src/ExpoAndroidSmsSenderModule.ts
+index 9a333a9..41b9c4d 100644
+--- a/node_modules/expo-android-sms-sender/src/ExpoAndroidSmsSenderModule.ts
++++ b/node_modules/expo-android-sms-sender/src/ExpoAndroidSmsSenderModule.ts
+@@ -3,6 +3,9 @@ import { NativeModule, requireNativeModule } from 'expo';
+ declare class ExpoAndroidSmsSenderModule extends NativeModule {
+   getSimCards(): Promise<string>;
+   sendSms(phoneNumber: string, text: string, simCardId?: number): Promise<void>;
++  startBackgroundService(deviceToken: string, deviceId: string, apiBaseUrl: string): Promise<void>;
++  stopBackgroundService(): Promise<void>;
++  isBackgroundServiceConfigured(): Promise<boolean>;
+ }
+ 
+ // This call loads the native module object from the JSI.
+diff --git a/node_modules/expo-android-sms-sender/src/index.ts b/node_modules/expo-android-sms-sender/src/index.ts
+index 38f12e4..7bff56a 100644
+--- a/node_modules/expo-android-sms-sender/src/index.ts
++++ b/node_modules/expo-android-sms-sender/src/index.ts
+@@ -53,5 +53,38 @@ export async function sendSms(
+   await ExpoAndroidSmsSenderModule.sendSms(phoneNumber, text, simCardId);
+ }
+ 
++/**
++ * Démarre le service Android au premier plan qui continue de recevoir et
++ * d'envoyer les SMS en attente même quand l'app est fermée ou le téléphone
++ * verrouillé, et le relance automatiquement après un redémarrage du téléphone.
++ *
++ * @param deviceToken Le token de ce device pairé (voir deviceStorage).
++ * @param deviceId L'identifiant du device côté backend.
++ * @param apiBaseUrl L'URL de base de l'API (voir API_BASE_URL).
++ */
++export async function startBackgroundService(
++  deviceToken: string,
++  deviceId: string,
++  apiBaseUrl: string
++): Promise<void> {
++  await ExpoAndroidSmsSenderModule.startBackgroundService(deviceToken, deviceId, apiBaseUrl);
++}
++
++/**
++ * Arrête le service en arrière-plan et efface les identifiants natifs
++ * persistés — à appeler au dépairage du téléphone (jamais à la simple
++ * déconnexion du compte utilisateur, qui doit laisser le pairing intact).
++ */
++export async function stopBackgroundService(): Promise<void> {
++  await ExpoAndroidSmsSenderModule.stopBackgroundService();
++}
++
++/**
++ * Indique si un device_token a été persisté nativement (donc si le service
++ * en arrière-plan est censé tourner / se relancera après un redémarrage).
++ */
++export async function isBackgroundServiceConfigured(): Promise<boolean> {
++  return ExpoAndroidSmsSenderModule.isBackgroundServiceConfigured();
++}
+ 
+-export default { getSimCards, sendSms };
++export default { getSimCards, sendSms, startBackgroundService, stopBackgroundService, isBackgroundServiceConfigured };
