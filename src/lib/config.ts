@@ -1,7 +1,7 @@
 // EXPO_PUBLIC_* est inliné au build par Expo (SDK 49+), à définir dans un fichier
 // .env à la racine (voir .env.example) — jamais commité avec de vraies valeurs.
 // Repli sur une IP locale de dev si la variable n'est pas définie.
-export const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://192.168.100.7:8000/api';
+export const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'https://sms-gateway-saas.onebioafrica.com/api';
 
 // ID client OAuth "Web" créé dans la Google Cloud Console (Identifiants > ID client OAuth
 // > Application Web). C'est bien le client WEB qu'il faut utiliser ici, même pour l'app
