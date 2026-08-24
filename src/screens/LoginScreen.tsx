@@ -7,7 +7,7 @@ import { Input } from '../components/Input';
 import { useLogin } from '../hooks/useLogin';
 import { isTwoFactorPending } from '../services/authService';
 import { useAuth } from '../hooks/useAuth';
-import { useGoogleAuth } from '../hooks/useGoogleAuth';
+import { useGoogleAuth, getGoogleAuthErrorMessage } from '../hooks/useGoogleAuth';
 
 export function LoginScreen({ navigation }: any) {
   const [email, setEmail] = useState('');
@@ -29,7 +29,17 @@ export function LoginScreen({ navigation }: any) {
 
   useEffect(() => {
     if (googleError) {
-      Toast.show({ type: 'error', text1: 'Connexion Google impossible' });
+      // On affiche le message EXACT de l'erreur (natif GoogleSignin ou
+      // réponse backend) en text2 : un message générique masquait la vraie
+      // cause, notamment les cas "ça marche en local, pas en build signé"
+      // (SHA-1 non enregistré pour ce build → DEVELOPER_ERROR).
+      console.error('[GoogleAuth] Erreur connexion Google:', googleError);
+      Toast.show({
+        type: 'error',
+        text1: 'Connexion Google impossible',
+        text2: getGoogleAuthErrorMessage(googleError),
+        autoHide: false,
+      });
     }
   }, [googleError]);
 

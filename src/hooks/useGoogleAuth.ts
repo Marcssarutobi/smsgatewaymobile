@@ -4,6 +4,58 @@ import { useMutation } from '@tanstack/react-query';
 import { googleAuthService } from '../services/googleAuthService';
 import { GOOGLE_WEB_CLIENT_ID } from '../lib/config';
 
+// Traduit l'erreur brute (native GoogleSignin OU réponse axios du backend) en
+// message lisible et EXACT à afficher à l'utilisateur. C'est volontairement
+// verbeux : le but est de voir la vraie cause en prod (build signé / APK),
+// là où "en local ça marchait" parce que le dev client utilisait un SHA-1 /
+// une config différente de celle du build distribué.
+export function getGoogleAuthErrorMessage(error: unknown): string {
+  const e = error as any;
+  if (!e) return 'Erreur inconnue.';
+
+  // Erreur venant du backend (POST /auth/google/mobile a répondu, mais en erreur).
+  if (e?.response) {
+    const status = e.response.status;
+    const backendMessage = e.response.data?.message ?? e.response.data?.error;
+    if (backendMessage) return `[${status}] ${backendMessage}`;
+    return `Le serveur a répondu avec le code ${status}.`;
+  }
+  if (e?.request && !e?.response) {
+    // Requête envoyée mais aucune réponse (mauvais API_BASE_URL, pas de réseau, CORS, etc.)
+    return `Impossible de joindre le serveur (${e?.message ?? 'pas de réponse'}).`;
+  }
+
+  // Erreurs natives connues du module GoogleSignin.
+  switch (e?.code) {
+    case statusCodes.PLAY_SERVICES_NOT_AVAILABLE:
+      return 'Google Play Services indisponible ou obsolète sur cet appareil.';
+    case statusCodes.SIGN_IN_REQUIRED:
+      return 'Connexion Google requise (session native invalide).';
+    case statusCodes.NULL_PRESENTER:
+      return "Erreur d'affichage du sélecteur de comptes Google (NULL_PRESENTER).";
+    // Code natif Android "DEVELOPER_ERROR" (10) : la config OAuth ne
+    // correspond pas au build utilisé. Cause la plus fréquente d'un
+    // "ça marchait en local" : le SHA-1 du build de dev est enregistré dans
+    // Google Cloud Console, mais pas celui du build signé (release/EAS/APK),
+    // ou le package name / SHA-1 déclaré ne correspond pas à ce build.
+    case '10':
+    case 10:
+      return "Configuration Google invalide pour ce build (DEVELOPER_ERROR / code 10) : le SHA-1 et/ou le nom de package de ce build ne sont probablement pas enregistrés sur le client OAuth Android dans Google Cloud Console.";
+    default:
+      break;
+  }
+
+  if (typeof e?.message === 'string' && e.message.length > 0) {
+    return e?.code ? `[${e.code}] ${e.message}` : e.message;
+  }
+
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return 'Erreur inconnue.';
+  }
+}
+
 // SDK natif Google (Play Services / Credential Manager) : contrairement à
 // expo-auth-session, `GoogleSignin.signIn()` affiche le sélecteur de comptes
 // natif Android (tiroir en bas avec les comptes déjà connectés sur le
