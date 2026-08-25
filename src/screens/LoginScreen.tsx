@@ -93,7 +93,7 @@ export function LoginScreen({ navigation }: any) {
           label="Continuer avec Google"
           variant="outline"
           isLoading={isGooglePending}
-          disabled={!isReady}
+          disabled={!isReady || isGooglePending}
           onPress={() => promptAsync()}
         />
 

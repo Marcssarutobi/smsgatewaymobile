@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
+import { GoogleSignin, statusCodes, isErrorWithCode } from '@react-native-google-signin/google-signin';
 import { useMutation } from '@tanstack/react-query';
 import { googleAuthService } from '../services/googleAuthService';
 import { GOOGLE_WEB_CLIENT_ID } from '../lib/config';
@@ -72,6 +72,11 @@ GoogleSignin.configure({
 
 export function useGoogleAuth() {
   const [pickerError, setPickerError] = useState<unknown>(null);
+  // Verrou explicite, en plus de isPending du useMutation ci-dessous : celui-ci
+  // couvre AUSSI la phase avant l'appel au backend (hasPlayServices/signOut/
+  // signIn), qui est justement la fenêtre pendant laquelle un double-tap
+  // déclenchait l'erreur native IN_PROGRESS (12502).
+  const [isSigningIn, setIsSigningIn] = useState(false);
 
   const {
     mutate: loginWithGoogle,
@@ -83,6 +88,14 @@ export function useGoogleAuth() {
   });
 
   const promptAsync = async () => {
+    // Rejoue-t-on un appel alors qu'un premier est encore en cours (double-tap,
+    // ou tap pendant que le sélecteur de comptes natif met du temps à
+    // s'afficher) ? On ignore silencieusement plutôt que de relancer
+    // GoogleSignin.signIn() une seconde fois — c'est ça, concrètement, qui
+    // provoquait l'erreur native "[12502] Sign-in in progress".
+    if (isSigningIn) return;
+
+    setIsSigningIn(true);
     try {
       setPickerError(null);
       await GoogleSignin.hasPlayServices();
@@ -107,18 +120,27 @@ export function useGoogleAuth() {
       } else {
         setPickerError(new Error('Aucun id_token retourné par Google'));
       }
-    } catch (e: any) {
-      // L'utilisateur a simplement annulé : ce n'est pas une erreur à afficher.
-      if (e?.code === statusCodes.SIGN_IN_CANCELLED) {
-        return;
-      }
-      // Une tentative précédente est encore considérée "en cours" côté natif
-      // (cas où une tentative antérieure n'a jamais résolu sa promesse).
-      if (e?.code === statusCodes.IN_PROGRESS) {
-        setPickerError(new Error('Une connexion Google est déjà en cours, réessaie dans quelques secondes.'));
-        return;
+    } catch (e: unknown) {
+      // isErrorWithCode() : vérificateur recommandé par la librairie pour
+      // fiabiliser l'accès à error.code (une comparaison directe e?.code
+      // peut échouer silencieusement selon la forme exacte de l'erreur
+      // native remontée par cette version du module).
+      if (isErrorWithCode(e)) {
+        // L'utilisateur a simplement annulé : ce n'est pas une erreur à afficher.
+        if (e.code === statusCodes.SIGN_IN_CANCELLED) {
+          return;
+        }
+        // Une tentative précédente est encore considérée "en cours" côté natif
+        // (cas où une tentative antérieure n'a jamais résolu sa promesse, ou
+        // survivant malgré le verrou isSigningIn ci-dessus).
+        if (e.code === statusCodes.IN_PROGRESS) {
+          setPickerError(new Error('Une connexion Google est déjà en cours, réessaie dans quelques secondes.'));
+          return;
+        }
       }
       setPickerError(e);
+    } finally {
+      setIsSigningIn(false);
     }
   };
 
@@ -127,7 +149,10 @@ export function useGoogleAuth() {
   return {
     promptAsync,
     isReady: isConfigured,
-    isPending,
+    // Exposé pour désactiver le bouton pendant TOUTE la séquence (pas
+    // seulement l'appel backend final) — c'est ce qui manquait pour empêcher
+    // le double-tap à la source.
+    isPending: isSigningIn || isPending,
     data,
     // On expose désormais AUSSI l'erreur backend (loginError), qui avant
     // n'était jamais renvoyée : le picker Google réussissait, l'appel au
