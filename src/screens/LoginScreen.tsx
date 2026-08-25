@@ -15,7 +15,15 @@ export function LoginScreen({ navigation }: any) {
   const { mutate: login, isPending } = useLogin();
   const { signIn } = useAuth();
 
-  const { promptAsync, isReady, isConfigured, isPending: isGooglePending, data: googleData, error: googleError } = useGoogleAuth();
+  const {
+    promptAsync,
+    isReady,
+    isConfigured,
+    isPending: isGooglePending,
+    data: googleData,
+    error: googleError,
+    debugInfo: googleDebugInfo,
+  } = useGoogleAuth();
 
   useEffect(() => {
     if (googleData) {
@@ -122,6 +130,17 @@ export function LoginScreen({ navigation }: any) {
             onPress={handleSubmit}
           />
         </View>
+
+        {(googleError || googleDebugInfo) && (
+          <View className="bg-rose-50 border border-rose-200 rounded-2xl mt-4 p-4 gap-1">
+            {googleError && (
+              <Text className="text-xs font-medium text-rose-700">{getGoogleAuthErrorMessage(googleError)}</Text>
+            )}
+            {googleDebugInfo && (
+              <Text className="text-[11px] text-rose-500">{googleDebugInfo}</Text>
+            )}
+          </View>
+        )}
 
         {!isConfigured && (
           <Text className="text-center text-xs text-amber-600 mt-6">

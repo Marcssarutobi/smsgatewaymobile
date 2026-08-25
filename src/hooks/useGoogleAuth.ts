@@ -4,6 +4,32 @@ import { useMutation } from '@tanstack/react-query';
 import { googleAuthService } from '../services/googleAuthService';
 import { GOOGLE_WEB_CLIENT_ID } from '../lib/config';
 
+// Décode la partie payload d'un JWT (base64url) sans vérifier la signature -
+// uniquement pour lire des claims publics (ex: "aud") à des fins de debug
+// côté client. Ne JAMAIS s'en servir pour valider un token : seule la
+// vérification serveur (voir GoogleAuthController::mobileLogin) fait foi.
+function decodeJwtPayload(token: string): Record<string, any> | null {
+  try {
+    const part = token.split('.')[1];
+    if (!part) return null;
+    let base64 = part.replace(/-/g, '+').replace(/_/g, '/');
+    const pad = base64.length % 4;
+    if (pad) base64 += '='.repeat(4 - pad);
+    const json =
+      typeof atob === 'function'
+        ? decodeURIComponent(
+            atob(base64)
+              .split('')
+              .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+              .join('')
+          )
+        : Buffer.from(base64, 'base64').toString('utf8');
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
 // Traduit l'erreur brute (native GoogleSignin OU réponse axios du backend) en
 // message lisible et EXACT à afficher à l'utilisateur. C'est volontairement
 // verbeux : le but est de voir la vraie cause en prod (build signé / APK),
@@ -77,6 +103,10 @@ export function useGoogleAuth() {
   // signIn), qui est justement la fenêtre pendant laquelle un double-tap
   // déclenchait l'erreur native IN_PROGRESS (12502).
   const [isSigningIn, setIsSigningIn] = useState(false);
+  // "aud" réellement embarqué dans l'id_token renvoyé par Google pour CE
+  // build précis. À comparer avec GOOGLE_WEB_CLIENT_ID (mobile) et
+  // GOOGLE_WEB_CLIENT_ID côté backend Laravel : les 3 doivent être identiques.
+  const [tokenAudience, setTokenAudience] = useState<string | null>(null);
 
   const {
     mutate: loginWithGoogle,
@@ -114,6 +144,7 @@ export function useGoogleAuth() {
       const idToken = response.data?.idToken;
 
       if (idToken) {
+        setTokenAudience(decodeJwtPayload(idToken)?.aud ?? null);
         loginWithGoogle(idToken, {
           onError: (e) => console.error('[GoogleAuth] Échec appel /auth/google/mobile:', e),
         });
@@ -146,6 +177,14 @@ export function useGoogleAuth() {
 
   const isConfigured = GOOGLE_WEB_CLIENT_ID.length > 0;
 
+  // Info de debug : à comparer avec le "GOOGLE_WEB_CLIENT_ID" du .env backend
+  // et le client OAuth "Web" dans Google Cloud Console. Un "[401] Token non
+  // destiné à cette application" vient presque toujours d'un de ces deux
+  // identifiants qui ne correspond pas à `aud`.
+  const debugInfo = tokenAudience
+    ? `aud du token reçu: ${tokenAudience} — webClientId compilé dans cet APK: ${GOOGLE_WEB_CLIENT_ID || '(vide)'}`
+    : null;
+
   return {
     promptAsync,
     isReady: isConfigured,
@@ -158,6 +197,7 @@ export function useGoogleAuth() {
     // n'était jamais renvoyée : le picker Google réussissait, l'appel au
     // backend échouait, et personne n'était prévenu (ni toast, ni navigation).
     error: pickerError ?? loginError,
+    debugInfo,
     isConfigured,
   };
 }
